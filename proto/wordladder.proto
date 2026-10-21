@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package wordladder;
+
+option go_package = "word-ladder/proto";
+
+service WordLadderService {
+  rpc StartGame (StartGameRequest) returns (StartGameResponse);
+  rpc SubmitWord (SubmitWordRequest) returns (SubmitWordResponse);
+}
+
+message StartGameRequest{
+}
+
+message StartGameResponse{
+  string start_word = 1;
+  string target_word = 2;
+}
+
+message SubmitWordRequest{
+  string word = 1;
+}
+
+message SubmitWordResponse{
+  bool valid = 1;
+  string message = 2;
+  string current_word = 3;
+  string target_word = 4;
+  bool game_complete= 5;
+}
