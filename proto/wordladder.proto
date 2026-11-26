@@ -7,18 +7,22 @@ option go_package = "word-ladder/proto";
 service WordLadderService {
   rpc StartGame (StartGameRequest) returns (StartGameResponse);
   rpc SubmitWord (SubmitWordRequest) returns (SubmitWordResponse);
+  rpc QuitGame (QuitGameRequest) returns (QuitGameResponse);
 }
 
 message StartGameRequest{
+  string username = 1;
 }
 
 message StartGameResponse{
-  string start_word = 1;
-  string target_word = 2;
+  int32 game_id = 1;
+  string start_word = 2;
+  string target_word = 3;
 }
 
 message SubmitWordRequest{
-  string word = 1;
+  int32 game_id = 1;
+  string word = 2;
 }
 
 message SubmitWordResponse{
@@ -26,5 +30,15 @@ message SubmitWordResponse{
   string message = 2;
   string current_word = 3;
   string target_word = 4;
-  bool game_complete= 5;
+  bool game_complete = 5;
+  int32 turns = 6;
+}
+
+message QuitGameRequest{
+  int32 game_id = 1;
+}
+
+message QuitGameResponse{
+  string message = 1;
+  int32 turns = 2;
 }

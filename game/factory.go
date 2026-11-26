@@ -21,8 +21,10 @@ func NewGameFactory() *GameFactory {
 	}
 }
 
-func (f *GameFactory) CreateGame() *Game {
+// CreateGame creates a new game with a random word pair.
+// The game ID and the username are given by the server.
+func (f *GameFactory) CreateGame(id int32, username string) *Game {
 	pair := f.pairs[rand.Intn(len(f.pairs))]
 
-	return NewGame(pair.Start, pair.Target)
+	return NewGame(id, username, pair.Start, pair.Target)
 }

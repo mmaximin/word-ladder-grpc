@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 )
 
 type Dictionary struct {
@@ -13,8 +14,12 @@ type Dictionary struct {
 
 var instance *Dictionary
 
+// once makes sure the dictionary is only loaded one time,
+// even if several goroutines (gRPC requests) ask for it at the same time.
+var once sync.Once
+
 func GetDictionary() *Dictionary {
-	if instance == nil {
+	once.Do(func() {
 		instance = &Dictionary{
 			Words: make(map[string]bool),
 		}
@@ -34,7 +39,7 @@ func GetDictionary() *Dictionary {
 		for word := range words {
 			instance.Words[strings.ToUpper(word)] = true
 		}
-	}
+	})
 
 	return instance
 }

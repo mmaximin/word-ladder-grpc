@@ -1,0 +1,46 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"   # AMQP (used by the game server and stats server)
+      - "15672:15672" # management website: http://localhost:15672 (guest / guest)
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  game-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: game-server
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      GAME_SERVER_PORT: "50051"
+    ports:
+      - "50051:50051"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  stats-server:
+    build:
+      context: .
+      dockerfile: statsserver/Dockerfile
+    container_name: stats-server
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      STATS_SERVER_PORT: "9000"
+      DB_PATH: /data/game_stats.db
+    ports:
+      - "9000:9000"
+    volumes:
+      - stats-data:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+volumes:
+  stats-data:
