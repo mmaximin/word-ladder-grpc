@@ -39,13 +39,11 @@ func main() {
 			continue
 		}
 
-		// Send the command to the server, one command per line.
 		_, err = fmt.Fprintf(conn, "%s\n", command)
 		if err != nil {
 			log.Fatalf("could not send command: %v", err)
 		}
 
-		// Print every line of the answer until the server sends "END".
 		for {
 			line, err := server.ReadString('\n')
 			if err != nil {

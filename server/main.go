@@ -24,9 +24,6 @@ type server struct {
 	factory    *game.GameFactory
 	publisher  *Publisher
 
-	// All the active games, using the game ID as the key.
-	// The mutex protects the map and the games inside it, because
-	// gRPC runs every request in its own goroutine.
 	mu     sync.Mutex
 	games  map[int32]*game.Game
 	nextID int32
@@ -53,8 +50,6 @@ func (s *server) StartGame(ctx context.Context, req *pb.StartGameRequest) (*pb.S
 	}, nil
 }
 
-// validateWord runs all the validation strategies on the word.
-// It returns an empty string if the word is valid, or the error message.
 func (s *server) validateWord(g *game.Game, word string) string {
 	lengthValidator := validation.LengthValidator{}
 	oneLetterValidator := validation.OneLetterValidator{}
@@ -97,7 +92,6 @@ func (s *server) SubmitWord(ctx context.Context, req *pb.SubmitWordRequest) (*pb
 		return nil, fmt.Errorf("game %d not found", req.GetGameId())
 	}
 
-	// Every submitted guess counts as one turn, valid or not.
 	g.Turns++
 
 	errorMessage := s.validateWord(g, word)
@@ -128,7 +122,6 @@ func (s *server) SubmitWord(ctx context.Context, req *pb.SubmitWordRequest) (*pb
 		Turns:        g.Turns,
 	}
 
-	// A finished game is removed from the active games.
 	if gameComplete {
 		delete(s.games, g.ID)
 	}
@@ -175,7 +168,6 @@ func (s *server) QuitGame(ctx context.Context, req *pb.QuitGameRequest) (*pb.Qui
 	}, nil
 }
 
-// getEnv returns the environment variable, or a default value if it is not set.
 func getEnv(name string, defaultValue string) string {
 	value := os.Getenv(name)
 	if value == "" {

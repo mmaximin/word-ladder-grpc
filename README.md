@@ -1,82 +1,55 @@
-# Word Ladder – Assignment 2 (Multiplayer, RabbitMQ and Stats)
+# Word Ladder – Assignment 2
 
-## Project Overview
+This is my Word Ladder game from Assignment 1, extended for Assignment 2.
 
-This project is a distributed implementation of the Word Ladder game developed in Go.
+Quick reminder of the game: you start with a word and have to get to a target word by changing one letter at a time. Every word has to be a real English word, the same length, and not used before. The ladder also needs at least 5 words.
 
-The player starts with one word and has to reach a target word by changing one letter at a time. Each word submitted must be a valid English word, must have the correct length, must differ from the current word by exactly one letter and cannot have already been used in the same game.
+In Assignment 1 only one person could play. Now:
 
-Assignment 1 was a single-player client-server game using gRPC. In Assignment 2 the system has been extended so that:
-
-- many players can play **at the same time**, each one with a username and their own game;
-- each game counts the number of **turns** (submitted guesses);
-- a player can **quit** (give up);
-- when a game finishes, the game server publishes a **game event to RabbitMQ**;
-- a separate **stats server** consumes those events, stores them in **SQLite** and answers questions from **stats clients** over plain **TCP sockets**;
-- the server components run in **Docker** using **Docker Compose**.
+- lots of people can play at the same time, each with their own username and game
+- the server counts your turns
+- you can type `quit` to give up
+- when a game ends, the result gets sent to RabbitMQ
+- a separate stats server picks up the results, saves them in SQLite and lets you check stats over a TCP socket
+- the servers run in Docker
 
 ---
 
-## Assignment 2 Architecture
+## How it all fits together
 
 ```
- +--------------+   gRPC    +----------------+   JSON event   +-----------+
- | game client  | --------> |  game-server   | -------------> | RabbitMQ  |
- | (player 1)   |           |  (gRPC, :50051)|  queue:        | (:5672,   |
- +--------------+           |  map of games  |  game_events   |  :15672)  |
- +--------------+   gRPC    |                |                +-----------+
- | game client  | --------> |                |                      |
- | (player 2)   |           +----------------+                      | consume
- +--------------+                                                   v
-                                                           +----------------+
- +--------------+   TCP socket (text, one command/line)    |  stats-server  |
- | stats client | <--------------------------------------> |  (:9000)       |
- +--------------+                                          |  SQLite DB     |
- +--------------+   TCP socket                             |  game_results  |
- | stats client | <--------------------------------------> |                |
- +--------------+                                          +----------------+
+game client  --gRPC-->  game-server  --JSON-->  RabbitMQ  -->  stats-server (SQLite)
+game client  --gRPC-->                                              ^
+                                                                    |
+stats client  <------------------- TCP socket --------------------->|
+stats client  <------------------- TCP socket --------------------->|
 ```
 
-- **Game client** (`client/`) – asks for a username, starts a game and sends words with gRPC.
-- **Game server** (`server/`) – multiplayer gRPC server. Keeps all active games and publishes a RabbitMQ event when a game finishes.
-- **RabbitMQ** – message broker between the game server and the stats server (queue `game_events`).
-- **Stats server** (`statsserver/`) – consumes events from RabbitMQ, saves them in SQLite, and serves stats clients over TCP sockets.
-- **Stats client** (`statsclient/`) – simple terminal program that sends commands to the stats server over a TCP socket.
-
-The game server and the stats server never talk to each other directly. They only communicate through RabbitMQ, so the stats server can be stopped and restarted without affecting the games (the events wait in the queue).
+The game server and the stats server never talk to each other directly. Everything goes through RabbitMQ. So if the stats server is down for a bit, the messages just wait in the queue until it comes back.
 
 ---
 
-## Game Client
+## The parts
 
-`client/main.go`
+### Game client (`client/`)
 
-1. Asks the player for a **username**.
-2. Calls `StartGame(username)` and receives the **game ID**, start word and target word.
-3. Reads words from the keyboard and calls `SubmitWord(game_id, word)` for each one.
-4. Shows whether the word was valid, the current word, the target word and the number of turns.
-5. If the player types `quit`, the client calls `QuitGame(game_id)` and the game is recorded as a **LOSS**.
-6. When the target word is reached, the game is a **WIN** and the client ends.
+- asks for your username
+- starts a game and shows your game ID, start word and target word
+- you type words, and it shows if they're valid and how many turns you've used
+- type `quit` to give up (that counts as a LOSS)
+- reach the target word and you WIN
 
-The server address can be changed with the `GAME_SERVER_ADDR` environment variable (default `localhost:50051`).
+### Game server (`server/`)
 
----
+This is the gRPC server. It has 3 calls:
 
-## Multiplayer gRPC Game Server
-
-`server/main.go`, `proto/wordladder.proto`
-
-The service now has three remote procedures:
-
-| RPC | Request | Response |
+| RPC | You send | You get back |
 |---|---|---|
-| `StartGame` | `username` | `game_id`, `start_word`, `target_word` |
-| `SubmitWord` | `game_id`, `word` | `valid`, `message`, `current_word`, `target_word`, `game_complete`, `turns` |
-| `QuitGame` | `game_id` | `message`, `turns` |
+| `StartGame` | username | game ID, start word, target word |
+| `SubmitWord` | game ID, word | valid or not, message, current word, target word, game complete, turns |
+| `QuitGame` | game ID | message, turns |
 
-### How multiple simultaneous games work
-
-In Assignment 1 the server stored only one game (`game *game.Game`). Now it stores a map of games:
+**How multiple games work:** before, the server only had one `game`. Now it has a map of games, with the game ID as the key:
 
 ```go
 mu     sync.Mutex
@@ -84,50 +57,36 @@ games  map[int32]*game.Game
 nextID int32
 ```
 
-- `StartGame` locks the mutex, increases `nextID` to get a **unique game ID**, asks the `GameFactory` to create a game for that username, and stores it in the map.
-- `SubmitWord` and `QuitGame` use the `game_id` from the request to find the correct game in the map. Each `Game` has its own current word, used words and turn counter, so the games are completely independent.
-- gRPC runs every request in its own goroutine, so two players can send requests at the same moment. The `sync.Mutex` makes sure only one goroutine reads or changes the map and the games at a time.
-- When a game finishes (WIN or LOSS) it is removed from the map and an event is published to RabbitMQ.
+- `StartGame` gives each new game the next ID, so IDs never repeat
+- `SubmitWord` and `QuitGame` use the game ID to find the right game
+- every game has its own words and turn count, so games don't mess with each other
+- gRPC handles each request in its own goroutine, so the mutex stops two requests from changing the map at the same time
+- when a game ends, it's removed from the map and an event is sent to RabbitMQ
 
-### Turns
+Every word you submit counts as a turn, even the invalid ones.
 
-Every word submitted with `SubmitWord` counts as one turn (valid or invalid), and the value is stored in the `Turns` field of the game.
+### RabbitMQ (`server/publisher.go`, `events/`)
 
----
-
-## RabbitMQ and Game Events
-
-`server/publisher.go`, `events/`
-
-When a game finishes, the game server publishes a JSON message to the RabbitMQ queue **`game_events`**:
+When a game ends, the game server sends a message like this to a queue called `game_events`:
 
 ```json
 {"username":"maria","game_id":1,"result":"WIN","turns":5}
 ```
 
-- `result` is `WIN` when the target word is reached and `LOSS` when the player quits.
-- The message is sent to the default exchange with the queue name as the routing key, so no extra exchanges or routing are needed.
-- The queue is durable and the messages are persistent.
-- The `GameEvent` struct and the queue name are in the shared `events/` package, so the publisher and the consumer always use the same format.
-- The connection URL comes from the `RABBITMQ_URL` environment variable (default `amqp://guest:guest@localhost:5672/`; in Docker `amqp://guest:guest@rabbitmq:5672/`).
-- Because RabbitMQ takes a few seconds to start, both servers retry the connection several times.
+`result` is `WIN` if you reached the target and `LOSS` if you quit.
 
-The RabbitMQ management website is available at **http://localhost:15672** (user `guest`, password `guest`). Open **Queues → game_events** to see the queue and the message rates.
+The `events/` folder has the message struct and the queue name. Both servers use it, so they always agree on the format. Both servers also retry the connection a few times, because RabbitMQ takes a few seconds to start.
 
----
+You can see RabbitMQ in the browser at http://localhost:15672 (user `guest`, password `guest`). Go to **Queues**, then `game_events`.
 
-## Stats Server
+### Stats server (`statsserver/`)
 
-`statsserver/main.go`, `statsserver/consumer.go`, `statsserver/database.go`
+This is a separate program that does two things at once:
 
-The stats server is a completely separate program. It does two things at the same time:
+1. a goroutine reads events from RabbitMQ and saves them in SQLite
+2. the main part accepts TCP connections, and each client gets its own goroutine, so lots of clients can be connected at once
 
-1. **A goroutine consumes RabbitMQ events** (`ConsumeEvents`). Each event is saved in SQLite and only then acknowledged, so no event is lost if saving fails.
-2. **The main goroutine accepts TCP socket clients.** Every client gets its own goroutine (`go handleClient(conn, db)`), so many stats clients can be connected at once.
-
-### SQLite
-
-The database file is `game_stats.db` (in Docker `/data/game_stats.db`, stored in a Docker volume so the data survives restarts). The SQLite driver is `modernc.org/sqlite`, which is written in pure Go, so no C compiler is needed.
+The database has one table:
 
 ```sql
 CREATE TABLE IF NOT EXISTS game_results (
@@ -140,13 +99,7 @@ CREATE TABLE IF NOT EXISTS game_results (
 );
 ```
 
-History query:
-
-```sql
-SELECT game_id, result, turns FROM game_results WHERE username = ? ORDER BY id;
-```
-
-Leaderboard query (wins descending, then fewer average turns first):
+The leaderboard query:
 
 ```sql
 SELECT username, COUNT(*) AS wins, AVG(turns) AS avg_turns
@@ -156,24 +109,19 @@ GROUP BY username
 ORDER BY wins DESC, avg_turns ASC;
 ```
 
----
+I used `modernc.org/sqlite` because it's pure Go, so it works on Windows and in Docker without installing a C compiler.
 
-## Socket Communication
+### Stats client (`statsclient/`)
 
-The stats server uses normal TCP sockets (`net.Listen` / `net.Dial`), **not gRPC**, on port **9000**.
+It connects to the stats server on port 9000 using a plain TCP socket (no gRPC here). You type a command, it sends it, and it prints the answer. The server sends `END` at the end of each answer, so the client knows when to stop reading.
 
-The protocol is plain text:
+Commands:
 
-- the client sends **one command per line**;
-- the server answers with one or more lines, followed by a line containing only **`END`**, so the client knows the answer is complete.
-
-### Available commands
-
-| Command | Description |
+| Command | What it does |
 |---|---|
-| `history <username>` | All the games of that user (game ID, result, turns) |
-| `leaderboard` | Wins and average turns per win of every user |
-| `quit` | Close the connection |
+| `history <username>` | shows all the games of that user |
+| `leaderboard` | shows wins and average turns per win for everyone |
+| `quit` | disconnects |
 
 Example:
 
@@ -192,70 +140,75 @@ ben             1     4.00
 
 ---
 
-## Stats Client
+## Docker
 
-`statsclient/main.go`
+- `server/Dockerfile` builds the game server (it also copies the dictionary)
+- `statsserver/Dockerfile` builds the stats server
+- `docker-compose.yml` starts everything:
 
-Connects to the stats server (`STATS_SERVER_ADDR`, default `localhost:9000`), reads commands from the keyboard, sends them over the socket and prints the answer until `END`. You can open as many stats clients as you want at the same time.
+| Service | Port |
+|---|---|
+| `rabbitmq` (`rabbitmq:3-management`) | 5672 and 15672 (website) |
+| `game-server` | 50051 |
+| `stats-server` | 9000 |
 
----
+Inside Docker the services find each other by name. For example, the servers connect to `amqp://guest:guest@rabbitmq:5672/` instead of `localhost`. The SQLite file is kept in a Docker volume, so your stats stay there after a restart.
 
-## Docker / Docker Compose
-
-- `server/Dockerfile` – builds the game server image (includes `words_dictionary.json`).
-- `statsserver/Dockerfile` – builds the stats server image.
-- `docker-compose.yml` – runs three containers:
-
-| Service | Image | Ports |
-|---|---|---|
-| `rabbitmq` | `rabbitmq:3-management` | 5672 (AMQP), 15672 (management website) |
-| `game-server` | built from `server/Dockerfile` | 50051 (gRPC) |
-| `stats-server` | built from `statsserver/Dockerfile` | 9000 (TCP) |
-
-Inside Docker the services use service names instead of `localhost` (for example `RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/`). The game server and stats server wait until RabbitMQ is healthy before starting.
-
-The clients are run on the host machine and connect to the published ports.
+The clients aren't in Docker. You run them in normal terminals.
 
 ---
 
-## How to Run the Complete System
+## How to run it
 
-Requirements: Go and Docker Desktop.
+You need Go and Docker Desktop (it has to be open).
 
-1. Start the servers (from the project root):
+**1. Start the servers** (from the project folder):
 
-   ```
-   docker compose up --build
-   ```
+```
+docker compose up --build
+```
 
-2. In a new terminal, start a game client (repeat in another terminal for a second player):
+Wait until you see `server listening` and `waiting for game events`.
 
-   ```
-   go run ./client
-   ```
+**2. Play** (one terminal per player):
 
-3. In a new terminal, start a stats client (repeat in another terminal for a second one):
+```
+go run ./client
+```
 
-   ```
-   go run ./statsclient
-   ```
+**3. Check stats** (one terminal per stats client):
 
-4. Open http://localhost:15672 (guest / guest) to see RabbitMQ.
+```
+go run ./statsclient
+```
 
-5. See the server logs:
+**4. Look at RabbitMQ:** go to http://localhost:15672 (guest / guest).
 
-   ```
-   docker compose logs -f game-server stats-server
-   ```
+**Stop everything:**
 
-6. Stop everything:
+```
+docker compose down
+```
 
-   ```
-   docker compose down          (keeps the database)
-   docker compose down -v       (also deletes the database volume)
-   ```
+or `docker compose down -v` if you also want to delete the stats.
 
-### Running without Docker (optional)
+### Ladders that work
+
+The game picks one of these at random:
+
+| Start → Target | Words to type |
+|---|---|
+| COLD → WARM | cord, card, ward, warm |
+| HEAD → TAIL | heal, teal, tell, tall, tail |
+| LOVE → HATE | rove, rote, rate, hate |
+
+### If you change the .proto file
+
+```
+protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative proto/wordladder.proto
+```
+
+### Running without Docker (if you want)
 
 ```
 docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
@@ -265,115 +218,33 @@ go run ./client
 go run ./statsclient
 ```
 
-### Regenerating the gRPC code
-
-After changing `proto/wordladder.proto`:
-
-```
-protoc --go_out=. --go_opt=paths=source_relative --go-grpc_out=. --go-grpc_opt=paths=source_relative proto/wordladder.proto
-```
-
 ---
 
-## Example Ladders
-
-The `GameFactory` picks one of these pairs at random. The ladder must contain at least five words.
-
-| Pair | Example ladder |
-|---|---|
-| COLD → WARM | COLD, CORD, CARD, WARD, WARM |
-| HEAD → TAIL | HEAD, HEAL, TEAL, TELL, TALL, TAIL |
-| LOVE → HATE | LOVE, ROVE, ROTE, RATE, HATE |
-
----
-
-## Directory Structure
+## Folder structure
 
 ```
 word-ladder/
-├── client/
-│   └── main.go              game client (gRPC)
-├── server/
-│   ├── main.go              multiplayer gRPC game server
-│   ├── publisher.go         RabbitMQ publisher
-│   └── Dockerfile
-├── statsserver/
-│   ├── main.go              TCP socket server + starts the consumer
-│   ├── consumer.go          RabbitMQ consumer
-│   ├── database.go          SQLite table and queries
-│   └── Dockerfile
-├── statsclient/
-│   └── main.go              TCP socket stats client
-├── events/
-│   ├── event.go             GameEvent struct + queue name (shared)
-│   └── rabbitmq.go          connect with retries + declare queue (shared)
-├── proto/
-│   ├── wordladder.proto
-│   ├── wordladder.pb.go         (generated)
-│   └── wordladder_grpc.pb.go    (generated)
-├── game/
-│   ├── game.go              Game state (ID, username, turns, ...)
-│   └── factory.go           GameFactory
-├── dictionary/
-│   └── dictionary.go        Singleton dictionary
-├── validation/              validation strategies
-│   ├── validator.go
-│   ├── length.go
-│   ├── dictionary.go
-│   ├── oneletter.go
-│   └── usedword.go
+├── client/         game client
+├── server/         game server + RabbitMQ publisher + Dockerfile
+├── statsserver/    stats server (RabbitMQ consumer, SQLite, TCP) + Dockerfile
+├── statsclient/    stats client
+├── events/         event struct + RabbitMQ helpers (used by both servers)
+├── proto/          .proto file + generated gRPC code
+├── game/           Game struct + GameFactory
+├── dictionary/     dictionary (Singleton)
+├── validation/     validation rules (Strategy)
 ├── words_dictionary.json
 ├── docker-compose.yml
-├── .dockerignore
-├── go.mod
-├── go.sum
+├── go.mod / go.sum
 └── README.md
 ```
 
 ---
 
-## Design Patterns
+## Design patterns (from Assignment 1, still here)
 
-### 1. Singleton Pattern
+**Singleton (`dictionary/dictionary.go`):** the dictionary file is big, so it only gets loaded once and every game shares it. I changed it to use `sync.Once`, so it's still loaded only once even if several requests ask for it at the same time.
 
-**Location:** `dictionary/dictionary.go`
+**Strategy (`validation/`):** each rule (length, dictionary, one letter, used word) is its own validator, and they all have the same `Validate` function. I didn't need to change anything here, because each validator already gets the game it's checking.
 
-The game only needs one dictionary instance, so `words_dictionary.json` is loaded only once and the same instance is reused by all the games.
-
-In Assignment 2 the server handles many requests at the same time, so the Singleton now uses `sync.Once`. This guarantees the dictionary is loaded exactly once even if two goroutines ask for it at the same moment.
-
-### 2. Strategy Pattern
-
-**Location:** `validation/`
-
-All validators implement the same `Validator` interface, but each one checks a different rule:
-
-- `LengthValidator` – the new word has the correct length.
-- `DictionaryValidator` – the word exists in the dictionary.
-- `OneLetterValidator` – exactly one letter has changed.
-- `UsedWordValidator` – the word has not already been used in this game.
-
-The validators did not need to change for Assignment 2, because they already receive the `*game.Game` they are checking. Each request simply passes its own game. The server runs them in `validateWord`.
-
-### 3. Factory Pattern
-
-**Location:** `game/factory.go`
-
-`GameFactory` creates new games by choosing one of the known word pairs (COLD → WARM, HEAD → TAIL, LOVE → HATE).
-
-In Assignment 2 `CreateGame(id, username)` also receives the game ID and the username, so every game created belongs to a player and has a unique ID.
-
----
-
-## Game Validation
-
-When the player submits a word, the server checks:
-
-1. The word has the correct length.
-2. The word exists in the English dictionary.
-3. Exactly one letter has changed from the current word.
-4. The word has not already been used.
-5. The ladder contains at least five words before reaching the target.
-6. Whether the new word is the target word.
-
-Words are converted to uppercase, so `cord`, `Cord` and `CORD` are treated the same way.
+**Factory (`game/factory.go`):** `GameFactory` picks a random word pair and creates the game. Now it also gets the game ID and the username, so every game belongs to a player.

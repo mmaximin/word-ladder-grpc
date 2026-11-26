@@ -14,8 +14,6 @@ type Dictionary struct {
 
 var instance *Dictionary
 
-// once makes sure the dictionary is only loaded one time,
-// even if several goroutines (gRPC requests) ask for it at the same time.
 var once sync.Once
 
 func GetDictionary() *Dictionary {

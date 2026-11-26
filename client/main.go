@@ -29,7 +29,6 @@ func main() {
 
 	reader := bufio.NewReader(os.Stdin)
 
-	// Ask for the username before starting the game.
 	username := ""
 	for username == "" {
 		fmt.Print("Enter your username > ")
@@ -61,7 +60,7 @@ func main() {
 		fmt.Print("Enter word > ")
 		word, err := reader.ReadString('\n')
 		if err != nil {
-			// Input closed (for example Ctrl+D): treat it as giving up.
+
 			word = "quit"
 		}
 		word = strings.TrimSpace(word)
@@ -70,7 +69,6 @@ func main() {
 			continue
 		}
 
-		// The player gives up: the server records the game as a LOSS.
 		if strings.ToLower(word) == "quit" {
 			qr, err := c.QuitGame(
 				context.Background(),

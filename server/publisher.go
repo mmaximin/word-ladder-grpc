@@ -12,11 +12,10 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
-// Publisher sends finished game events to RabbitMQ.
 type Publisher struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
-	mu      sync.Mutex // an AMQP channel should not be used by two goroutines at once
+	mu      sync.Mutex
 }
 
 func NewPublisher(url string) *Publisher {
@@ -48,13 +47,11 @@ func (p *Publisher) Publish(event events.GameEvent) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Empty exchange name = default exchange, which sends the message
-	// directly to the queue with the same name as the routing key.
 	err = p.channel.PublishWithContext(ctx,
-		"",               // exchange
-		events.QueueName, // routing key (queue name)
-		false,            // mandatory
-		false,            // immediate
+		"",
+		events.QueueName,
+		false,
+		false,
 		amqp.Publishing{
 			ContentType:  "application/json",
 			DeliveryMode: amqp.Persistent,

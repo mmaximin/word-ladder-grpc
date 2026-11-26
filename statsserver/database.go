@@ -8,7 +8,7 @@ import (
 
 	"word-ladder/events"
 
-	_ "modernc.org/sqlite" // SQLite driver (pure Go, no C compiler needed)
+	_ "modernc.org/sqlite"
 )
 
 func OpenDatabase(path string) *sql.DB {
@@ -17,8 +17,6 @@ func OpenDatabase(path string) *sql.DB {
 		log.Fatalf("could not open database: %v", err)
 	}
 
-	// SQLite only allows one writer at a time, so we use a single
-	// connection. database/sql makes the goroutines take turns.
 	db.SetMaxOpenConns(1)
 
 	_, err = db.Exec(`
@@ -46,7 +44,6 @@ func SaveResult(db *sql.DB, event events.GameEvent) error {
 	return err
 }
 
-// History returns one line per game played by the user.
 func History(db *sql.DB, username string) ([]string, error) {
 	rows, err := db.Query(
 		"SELECT game_id, result, turns FROM game_results WHERE username = ? ORDER BY id",
@@ -76,8 +73,6 @@ func History(db *sql.DB, username string) ([]string, error) {
 	return lines, rows.Err()
 }
 
-// Leaderboard returns the number of wins and the average turns per win
-// for every user with at least one win, best players first.
 func Leaderboard(db *sql.DB) ([]string, error) {
 	rows, err := db.Query(`
 		SELECT username, COUNT(*) AS wins, AVG(turns) AS avg_turns
@@ -110,7 +105,6 @@ func Leaderboard(db *sql.DB) ([]string, error) {
 	return lines, rows.Err()
 }
 
-// cleanUsername is used so that "Maria" and "maria " are the same user.
 func cleanUsername(username string) string {
 	return strings.TrimSpace(username)
 }

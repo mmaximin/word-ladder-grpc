@@ -10,7 +10,6 @@ import (
 	"strings"
 )
 
-// getEnv returns the environment variable, or a default value if it is not set.
 func getEnv(name string, defaultValue string) string {
 	value := os.Getenv(name)
 	if value == "" {
@@ -19,10 +18,6 @@ func getEnv(name string, defaultValue string) string {
 	return value
 }
 
-// handleClient serves one stats client. Each client runs in its own goroutine.
-//
-// Protocol: the client sends one command per line. The server answers with
-// one or more lines and then a line containing only "END".
 func handleClient(conn net.Conn, db *sql.DB) {
 	defer conn.Close()
 
@@ -83,10 +78,8 @@ func main() {
 	db := OpenDatabase(dbPath)
 	defer db.Close()
 
-	// 1. Consume RabbitMQ events in the background.
 	go ConsumeEvents(rabbitURL, db)
 
-	// 2. Accept TCP socket clients at the same time.
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		log.Fatalf("failed to listen: %v", err)
@@ -102,7 +95,6 @@ func main() {
 			continue
 		}
 
-		// One goroutine per client, so many clients can be served at once.
 		go handleClient(conn, db)
 	}
 }

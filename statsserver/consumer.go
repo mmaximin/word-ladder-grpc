@@ -8,8 +8,6 @@ import (
 	"word-ladder/events"
 )
 
-// ConsumeEvents reads game events from RabbitMQ forever and saves them
-// in SQLite. It runs in its own goroutine (started in main).
 func ConsumeEvents(rabbitURL string, db *sql.DB) {
 	conn := events.Connect(rabbitURL)
 	defer conn.Close()
@@ -23,13 +21,13 @@ func ConsumeEvents(rabbitURL string, db *sql.DB) {
 	events.DeclareQueue(ch)
 
 	messages, err := ch.Consume(
-		events.QueueName, // queue
-		"stats-server",   // consumer name
-		false,            // auto-ack: false, we ack after saving to the database
-		false,            // exclusive
-		false,            // no-local
-		false,            // no-wait
-		nil,              // arguments
+		events.QueueName,
+		"stats-server",
+		false,
+		false,
+		false,
+		false,
+		nil,
 	)
 	if err != nil {
 		log.Fatalf("failed to start consuming: %v", err)
@@ -50,7 +48,7 @@ func ConsumeEvents(rabbitURL string, db *sql.DB) {
 
 		if err := SaveResult(db, event); err != nil {
 			log.Printf("could not save event: %v", err)
-			msg.Nack(false, true) // put it back in the queue
+			msg.Nack(false, true)
 			continue
 		}
 
