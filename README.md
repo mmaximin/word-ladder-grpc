@@ -58,6 +58,7 @@ nextID int32
 ```
 
 - `StartGame` gives each new game the next ID, so IDs never repeat
+- each username can only have one active game at a time. If `maria` is already playing and someone else tries to start with `maria`, the server says `username maria already has an active game`. Once her game ends (WIN or quit) the name is free again
 - `SubmitWord` and `QuitGame` use the game ID to find the right game
 - every game has its own words and turn count, so games don't mess with each other
 - gRPC handles each request in its own goroutine, so the mutex stops two requests from changing the map at the same time

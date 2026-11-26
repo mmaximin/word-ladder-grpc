@@ -36,6 +36,14 @@ func (s *server) StartGame(ctx context.Context, req *pb.StartGameRequest) (*pb.S
 	}
 
 	s.mu.Lock()
+
+	for _, activeGame := range s.games {
+		if activeGame.Username == username {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("username %s already has an active game", username)
+		}
+	}
+
 	s.nextID++
 	g := s.factory.CreateGame(s.nextID, username)
 	s.games[g.ID] = g
